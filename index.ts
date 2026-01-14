@@ -80,50 +80,52 @@ async function playAudio(videoUrl: string) {
 async function main() {
   console.log('🎵 YouTube Music Player\n');
 
-  try {
-    // Get search query from user
-    const query = await input({
-      message: 'Search for music:',
-    });
+  while (true) {
+    try {
+      // Get search query from user
+      const query = await input({
+        message: 'Search for music:',
+      });
 
-    if (!query.trim()) {
-      console.log('Please enter a search query');
-      return;
+      if (!query.trim()) {
+        console.log('Please enter a search query\n');
+        continue;
+      }
+
+      console.log('\n🔍 Searching...\n');
+
+      // Search YouTube
+      const results = await searchYouTube(query);
+
+      if (results.length === 0) {
+        console.log('No results found\n');
+        continue;
+      }
+
+      // Let user select a video
+      const choices = results.map((video) => ({
+        name: `${video.title} - ${video.author.name} [${video.duration.timestamp}]`,
+        value: video,
+      }));
+
+      const selectedVideo = await select({
+        message: 'Select a track:',
+        choices,
+      });
+
+      console.log(`\n▶️  Now playing: ${selectedVideo.title}\n`);
+
+      // Play the selected video
+      await playAudio(selectedVideo.url);
+
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('User force closed')) {
+        console.log('\n👋 Goodbye!\n');
+        process.exit(0);
+      }
+      console.error('Error:', error);
+      console.log('\n');
     }
-
-    console.log('\n🔍 Searching...\n');
-
-    // Search YouTube
-    const results = await searchYouTube(query);
-
-    if (results.length === 0) {
-      console.log('No results found');
-      return;
-    }
-
-    // Let user select a video
-    const choices = results.map((video) => ({
-      name: `${video.title} - ${video.author.name} [${video.duration.timestamp}]`,
-      value: video,
-    }));
-
-    const selectedVideo = await select({
-      message: 'Select a track:',
-      choices,
-    });
-
-    console.log(`\n▶️  Now playing: ${selectedVideo.title}\n`);
-
-    // Play the selected video
-    await playAudio(selectedVideo.url);
-
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('User force closed')) {
-      console.log('\n👋 Goodbye!\n');
-      process.exit(0);
-    }
-    console.error('Error:', error);
-    process.exit(1);
   }
 }
 
