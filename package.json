@@ -1,0 +1,16 @@
+{
+  "name": "music-cli",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.2.0",
+    "yt-search": "^2.13.1"
+  }
+}
