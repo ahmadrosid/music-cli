@@ -30,7 +30,39 @@ async function searchYouTube(query: string): Promise<VideoInfo[]> {
   }
 }
 
-async function playAudio(videoUrl: string) {
+function parseDuration(timestamp: string): number {
+  const parts = timestamp.split(':').map(Number);
+  if (parts.length === 2) {
+    // Format: MM:SS
+    return parts[0] * 60 + parts[1];
+  } else if (parts.length === 3) {
+    // Format: HH:MM:SS
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  return 0;
+}
+
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function drawProgressBar(current: number, total: number) {
+  const barWidth = 40;
+  const percentage = Math.min(current / total, 1);
+  const filled = Math.floor(barWidth * percentage);
+  const empty = barWidth - filled;
+
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const timeDisplay = `${formatTime(current)} / ${formatTime(total)}`;
+  const percentDisplay = `${Math.floor(percentage * 100)}%`;
+
+  // Clear line and write progress
+  process.stdout.write(`\r${bar} ${timeDisplay} ${percentDisplay}`);
+}
+
+async function playAudio(videoUrl: string, duration: string): Promise<{ stoppedByUser: boolean }> {
   try {
     console.log('\n🎵 Getting audio stream...\n');
 
@@ -42,6 +74,8 @@ async function playAudio(videoUrl: string) {
       throw new Error('Could not get audio stream URL');
     }
 
+    const totalSeconds = parseDuration(duration);
+
     // Use ffplay to play the audio stream directly
     const ffplay = spawn('ffplay', [
       '-nodisp',           // No video display
@@ -50,25 +84,72 @@ async function playAudio(videoUrl: string) {
       audioUrl
     ]);
 
-    return new Promise<void>((resolve, reject) => {
+    // Enable raw mode to capture Esc key
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+    }
+
+    return new Promise<{ stoppedByUser: boolean }>((resolve, reject) => {
+      console.log('Press ESC to stop playback\n');
+
+      let currentTime = 0;
+
+      // Simple timer-based progress (updates every second)
+      const progressInterval = setInterval(() => {
+        currentTime++;
+        if (currentTime <= totalSeconds) {
+          drawProgressBar(currentTime, totalSeconds);
+        }
+      }, 1000);
+
+      const cleanup = () => {
+        clearInterval(progressInterval);
+        if (process.stdin.isTTY) {
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+        }
+        process.stdin.removeListener('data', keyHandler);
+        process.removeListener('SIGINT', sigintHandler);
+        process.stdout.write('\n'); // Move to new line after progress bar
+      };
+
+      const keyHandler = (data: Buffer) => {
+        // Check for Esc key (code 27)
+        if (data[0] === 27) {
+          ffplay.kill();
+          console.log('\n⏹️  Playback stopped\n');
+          cleanup();
+          resolve({ stoppedByUser: true });
+        }
+      };
+
+      const sigintHandler = () => {
+        ffplay.kill();
+        console.log('\n⏹️  Playback stopped\n');
+        cleanup();
+        process.exit(0);
+      };
+
+      // Listen for key presses
+      process.stdin.on('data', keyHandler);
+
+      // Handle Ctrl+C
+      process.on('SIGINT', sigintHandler);
+
       ffplay.on('close', (code) => {
+        cleanup();
         if (code === 0) {
           console.log('\n✅ Playback finished\n');
-          resolve();
+          resolve({ stoppedByUser: false });
         } else if (code !== null) {
           reject(new Error(`ffplay exited with code ${code}`));
         }
       });
 
       ffplay.on('error', (error) => {
+        cleanup();
         reject(error);
-      });
-
-      // Handle Ctrl+C
-      process.on('SIGINT', () => {
-        ffplay.kill();
-        console.log('\n\n⏹️  Playback stopped\n');
-        process.exit(0);
       });
     });
   } catch (error) {
@@ -102,21 +183,29 @@ async function main() {
         continue;
       }
 
-      // Let user select a video
-      const choices = results.map((video) => ({
-        name: `${video.title} - ${video.author.name} [${video.duration.timestamp}]`,
-        value: video,
-      }));
+      // Keep showing the same results until user finishes a song naturally
+      let continueWithSameResults = true;
+      while (continueWithSameResults) {
+        // Let user select a video
+        const choices = results.map((video) => ({
+          name: `${video.title} - ${video.author.name} [${video.duration.timestamp}]`,
+          value: video,
+        }));
 
-      const selectedVideo = await select({
-        message: 'Select a track:',
-        choices,
-      });
+        const selectedVideo = await select({
+          message: 'Select a track:',
+          choices,
+        });
 
-      console.log(`\n▶️  Now playing: ${selectedVideo.title}\n`);
+        console.log(`\n▶️  Now playing: ${selectedVideo.title}\n`);
 
-      // Play the selected video
-      await playAudio(selectedVideo.url);
+        // Play the selected video
+        const { stoppedByUser } = await playAudio(selectedVideo.url, selectedVideo.duration.timestamp);
+
+        // If stopped by user (Esc), show the same results again
+        // If finished naturally, exit loop and ask for new search
+        continueWithSameResults = stoppedByUser;
+      }
 
     } catch (error) {
       if (error instanceof Error && error.message.includes('User force closed')) {
